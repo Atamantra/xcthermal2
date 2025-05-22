@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Thermal Soaring Forecast Tool</title>
+
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <!-- Bootstrap CSS -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" />
+
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+    }
+    #map {
+      height: 80vh;
+      width: 100%;
+    }
+    #suggestions {
+      position: absolute;
+      background: white;
+      border: 1px solid #ccc;
+      z-index: 1000;
+      width: 100%;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .suggestion-item {
+      padding: 8px 10px;
+      cursor: pointer;
+    }
+    .suggestion-item:hover {
+      background-color: #f1f1f1;
+    }
+    pre {
+      background: #f8f9fa;
+      padding: 10px;
+      border-radius: 6px;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body class="p-3">
+
+  <h2>🪂 Thermal Soaring Forecast Tool</h2>
+
+  <div class="input-group mb-2 position-relative">
+    <input type="text" id="searchInput" class="form-control" placeholder="Search for a place or address…" autocomplete="off"/>
+    <button id="locateBtn" class="btn btn-primary">Use My Location</button>
+    <div id="suggestions" class="d-none"></div>
+  </div>
+
+  <div id="map" class="mb-3"></div>
+
+  <button id="explainBtn" class="btn btn-info mb-3">🧠 Explain Weather for Soaring</button>
+  <pre id="aiExplainBox"></pre>
+
+  <ul class="nav nav-tabs" id="dataTabs" role="tablist">
+    <li class="nav-item"><a class="nav-link active" data-bs-toggle="tab" href="#general">General</a></li>
+    <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#thermal">Thermal</a></li>
+    <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#lcl">LCL</a></li>
+    <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#cape">CAPE</a></li>
+  </ul>
+
+  <div class="tab-content mt-3">
+    <div class="tab-pane fade show active" id="general"><pre id="weatherInfo">Loading...</pre></div>
+    <div class="tab-pane fade" id="thermal"><pre id="thermalInfo">Loading...</pre></div>
+    <div class="tab-pane fade" id="lcl"><pre id="lclInfo">Loading...</pre></div>
+    <div class="tab-pane fade" id="cape"><pre id="capeInfo">Loading...</pre></div>
+  </div>
+
+  <!-- Leaflet & Bootstrap JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+  <script>
+    const map = L.map('map').setView([36.55, 29.13], 10);
+    const marker = L.marker([36.55, 29.13], { draggable: true }).addTo(map);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+    const safe = (arr, i) => Array.isArray(arr) && arr.length > i ? arr[i] : null;
+
+    async function fetchWeather(lat, lon) {
+      const params = [
+        'temperature_2m',
+        'dewpoint_2m',
+        'temperature_850hPa',
+        'temperature_700hPa',
+        'cape',
+        'cloudcover'
+      ].join(',');
+
+      const url = `https://api.open-meteo.com/v1/gfs?latitude=${lat}&longitude=${lon}&hourly=${params}&timezone=auto`;
+
+      try {
+        const res = await fetch(url);
+        const data = await res.json();
+        const i = 12;
+
+        const t2m = safe(data.hourly.temperature_2m, i),
+              td2m = safe(data.hourly.dewpoint_2m, i),
+              t850 = safe(data.hourly.temperature_850hPa, i),
+              t700 = safe(data.hourly.temperature_700hPa, i),
+              cape = safe(data.hourly.cape, i),
+              cc = safe(data.hourly.cloudcover, i),
+              time = safe(data.hourly.time, i);
+
+        const lcl = 125 * (t2m - td2m),
+              lapse = (t850 - t700) / 1500,
+              ti = t850 - t2m,
+              inversion = t700 > t850 ? 'Yes' : 'No';
+
+        document.getElementById('weatherInfo').textContent = `
+Time: ${time}
+Temp (2m): ${t2m} °C
+Dew Pt: ${td2m} °C
+Cloudcover: ${cc} %`;
+
+        document.getElementById('thermalInfo').textContent = `
+Thermal Index: ${ti.toFixed(1)} °C
+Lapse Rate: ${lapse.toFixed(3)} °C/m
+
+• TI < –2°C → strong thermals
+• Lapse > 0.0065°C/m → unstable`;
+
+        document.getElementById('lclInfo').textContent = `
+LCL: ${lcl.toFixed(0)} m
+T-Td Spread: ${(t2m - td2m).toFixed(1)} °C
+Inversion: ${inversion}`;
+
+        document.getElementById('capeInfo').textContent = `
+CAPE: ${cape} J/kg
+Cloudcover: ${cc} %`;
+      } catch (err) {
+        console.error(err);
+        ['weatherInfo','thermalInfo','lclInfo','capeInfo'].forEach(id =>
+          document.getElementById(id).textContent = 'Error loading data.'
+        );
+      }
+    }
+
+    function updateFromMarker() {
+      const { lat, lng } = marker.getLatLng();
+      fetchWeather(lat, lng);
+    }
+
+    marker.on('dragend', updateFromMarker);
+    map.on('click', e => {
+      marker.setLatLng(e.latlng);
+      updateFromMarker();
+    });
+
+    document.getElementById('locateBtn').addEventListener('click', () => {
+      navigator.geolocation.getCurrentPosition(
+        pos => {
+          const { latitude, longitude } = pos.coords;
+          map.setView([latitude, longitude], 11);
+          marker.setLatLng([latitude, longitude]);
+          fetchWeather(latitude, longitude);
+        },
+        () => alert('Unable to access location.')
+      );
+    });
+
+    // Autocomplete search
+    const input = document.getElementById('searchInput');
+    const suggestionsBox = document.getElementById('suggestions');
+
+    input.addEventListener('input', async () => {
+      const q = input.value.trim();
+      if (q.length < 2) {
+        suggestionsBox.classList.add('d-none');
+        return;
+      }
+
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}`);
+      const data = await res.json();
+
+      suggestionsBox.innerHTML = '';
+      data.forEach(loc => {
+        const div = document.createElement('div');
+        div.className = 'suggestion-item';
+        div.textContent = loc.display_name;
+        div.addEventListener('click', () => {
+          const lat = parseFloat(loc.lat), lon = parseFloat(loc.lon);
+          map.setView([lat, lon], 11);
+          marker.setLatLng([lat, lon]);
+          fetchWeather(lat, lon);
+          suggestionsBox.classList.add('d-none');
+          input.value = loc.display_name;
+        });
+        suggestionsBox.appendChild(div);
+      });
+      suggestionsBox.classList.remove('d-none');
+    });
+
+    // Fake GPT explanation (replace with your API)
+    document.getElementById('explainBtn').addEventListener('click', () => {
+      const text = document.getElementById('thermalInfo').textContent;
+      document.getElementById('aiExplainBox').textContent =
+        "🧠 GPT Analysis:\nBased on a thermal index of -3°C and lapse rate of 0.007°C/m, the atmosphere is unstable with strong potential for thermal soaring. Expect good updrafts, especially with low cloud cover.";
+    });
+
+    // Initial load
+    updateFromMarker();
+  </script>
+</body>
+</html>
